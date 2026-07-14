@@ -1,0 +1,401 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ChatGPT Session 注入工具</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            font-family: 'Segoe UI', system-ui, -apple-system, sans-serif;
+            background: #0a0a0a;
+            color: #e0e0e0;
+            min-height: 100vh;
+            padding: 40px 20px;
+        }
+        .container {
+            max-width: 800px;
+            margin: 0 auto;
+        }
+        h1 {
+            font-size: 24px;
+            margin-bottom: 8px;
+            background: linear-gradient(135deg, #10a37f, #1a7f64);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+        }
+        .subtitle {
+            color: #888;
+            margin-bottom: 30px;
+            font-size: 14px;
+        }
+        .step {
+            background: #1a1a1a;
+            border: 1px solid #2a2a2a;
+            border-radius: 12px;
+            padding: 24px;
+            margin-bottom: 20px;
+        }
+        .step-header {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            margin-bottom: 16px;
+        }
+        .step-num {
+            background: #10a37f;
+            color: white;
+            width: 28px;
+            height: 28px;
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-weight: bold;
+            font-size: 14px;
+            flex-shrink: 0;
+        }
+        .step-title {
+            font-size: 16px;
+            font-weight: 600;
+        }
+        textarea {
+            width: 100%;
+            height: 120px;
+            background: #111;
+            border: 1px solid #333;
+            border-radius: 8px;
+            color: #e0e0e0;
+            padding: 12px;
+            font-family: 'Consolas', 'Monaco', monospace;
+            font-size: 13px;
+            resize: vertical;
+        }
+        textarea:focus {
+            outline: none;
+            border-color: #10a37f;
+        }
+        .code-block {
+            background: #111;
+            border: 1px solid #333;
+            border-radius: 8px;
+            padding: 12px;
+            font-family: 'Consolas', 'Monaco', monospace;
+            font-size: 12px;
+            color: #a0ffa0;
+            overflow-x: auto;
+            white-space: pre-wrap;
+            word-break: break-all;
+            max-height: 200px;
+            overflow-y: auto;
+            position: relative;
+        }
+        .btn {
+            background: #10a37f;
+            color: white;
+            border: none;
+            padding: 10px 24px;
+            border-radius: 8px;
+            cursor: pointer;
+            font-size: 14px;
+            font-weight: 600;
+            transition: all 0.2s;
+        }
+        .btn:hover { background: #0d8c6d; }
+        .btn:active { transform: scale(0.98); }
+        .btn-secondary {
+            background: #333;
+        }
+        .btn-secondary:hover { background: #444; }
+        .btn-row {
+            display: flex;
+            gap: 10px;
+            margin-top: 12px;
+        }
+        .info {
+            background: #1a2a1a;
+            border: 1px solid #2a4a2a;
+            border-radius: 8px;
+            padding: 12px 16px;
+            font-size: 13px;
+            color: #8fbc8f;
+            margin-top: 12px;
+        }
+        .warn {
+            background: #2a2a1a;
+            border: 1px solid #4a4a2a;
+            color: #bcbc8f;
+        }
+        .error {
+            background: #2a1a1a;
+            border: 1px solid #4a2a2a;
+            color: #bc8f8f;
+        }
+        .success {
+            color: #10a37f;
+            font-weight: 600;
+        }
+        .hidden { display: none; }
+        .parsed-info {
+            margin-top: 12px;
+        }
+        .parsed-info table {
+            width: 100%;
+            border-collapse: collapse;
+        }
+        .parsed-info td {
+            padding: 6px 10px;
+            border-bottom: 1px solid #222;
+            font-size: 13px;
+        }
+        .parsed-info td:first-child {
+            color: #888;
+            width: 140px;
+        }
+        .parsed-info td:last-child {
+            color: #ccc;
+            word-break: break-all;
+        }
+        .method-tabs {
+            display: flex;
+            gap: 0;
+            margin-bottom: 16px;
+        }
+        .method-tab {
+            padding: 8px 20px;
+            background: #222;
+            border: 1px solid #333;
+            color: #888;
+            cursor: pointer;
+            font-size: 13px;
+            transition: all 0.2s;
+        }
+        .method-tab:first-child { border-radius: 8px 0 0 8px; }
+        .method-tab:last-child { border-radius: 0 8px 8px 0; }
+        .method-tab.active {
+            background: #10a37f;
+            border-color: #10a37f;
+            color: white;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🔑 ChatGPT Session 注入工具</h1>
+        <p class="subtitle">将导出的 CPA JSON 注入浏览器，实现免密码登录 ChatGPT</p>
+
+        <!-- 第1步：粘贴 JSON -->
+        <div class="step">
+            <div class="step-header">
+                <div class="step-num">1</div>
+                <div class="step-title">粘贴导出的 JSON</div>
+            </div>
+            <textarea id="jsonInput" placeholder='粘贴完整的 CPA JSON（包含 session_token、access_token 等字段）...'></textarea>
+            <div class="btn-row">
+                <button class="btn" onclick="parseJSON()">解析</button>
+                <button class="btn btn-secondary" onclick="loadSample()">加载示例</button>
+            </div>
+            <div id="parseResult" class="hidden"></div>
+        </div>
+
+        <!-- 第2步：选择方式 -->
+        <div class="step hidden" id="step2">
+            <div class="step-header">
+                <div class="step-num">2</div>
+                <div class="step-title">选择注入方式</div>
+            </div>
+            <div class="method-tabs">
+                <div class="method-tab active" onclick="switchMethod('console')">控制台脚本</div>
+                <div class="method-tab" onclick="switchMethod('bookmarklet')">书签注入</div>
+            </div>
+
+            <!-- 控制台方式 -->
+            <div id="method-console">
+                <p style="font-size:13px; color:#999; margin-bottom:12px;">
+                    ① 在浏览器中打开 <a href="https://chatgpt.com" target="_blank" style="color:#10a37f">chatgpt.com</a>（任意页面）<br>
+                    ② 按 <kbd style="background:#333;padding:2px 6px;border-radius:3px">F12</kbd> 打开开发者工具 → 切换到 <strong>Console</strong> 标签<br>
+                    ③ 粘贴以下代码并按回车执行<br>
+                    ④ 页面会自动刷新，完成登录
+                </p>
+                <div class="code-block" id="consoleCode"></div>
+                <div class="btn-row">
+                    <button class="btn" onclick="copyCode('consoleCode')">📋 复制代码</button>
+                </div>
+            </div>
+
+            <!-- 书签方式 -->
+            <div id="method-bookmarklet" class="hidden">
+                <p style="font-size:13px; color:#999; margin-bottom:12px;">
+                    ① 将下面的按钮拖到浏览器书签栏<br>
+                    ② 在 <a href="https://chatgpt.com" target="_blank" style="color:#10a37f">chatgpt.com</a> 页面点击该书签<br>
+                    ③ 页面会自动刷新，完成登录
+                </p>
+                <div style="text-align:center; padding: 20px;">
+                    <a id="bookmarkletLink" href="#" class="btn" style="text-decoration:none; display:inline-block; font-size:16px; padding:12px 32px;">
+                        📌 ChatGPT 登录
+                    </a>
+                    <p style="font-size:12px; color:#666; margin-top:8px;">↑ 拖拽此按钮到书签栏</p>
+                </div>
+            </div>
+
+            <div class="info warn" style="margin-top:16px;">
+                ⚠️ 注意：必须在 <strong>chatgpt.com</strong> 域名下执行，其他页面无法设置 cookie。
+            </div>
+        </div>
+
+        <!-- 第3步：工作空间切换（可选） -->
+        <div class="step hidden" id="step3">
+            <div class="step-header">
+                <div class="step-num">3</div>
+                <div class="step-title">切换工作空间（可选）</div>
+            </div>
+            <p style="font-size:13px; color:#999; margin-bottom:12px;">
+                登录后默认在个人空间。如需切换到工作空间，在 ChatGPT 页面的控制台执行以下代码：
+            </p>
+            <div class="code-block" id="workspaceCode"></div>
+            <div class="btn-row">
+                <button class="btn" onclick="copyCode('workspaceCode')">📋 复制代码</button>
+            </div>
+            <div class="info">
+                💡 执行后会自动从 <code>/api/auth/session</code> 获取工作空间作用域的 access_token 并打印到控制台。
+            </div>
+        </div>
+    </div>
+
+    <script>
+        let parsedData = null;
+
+        function parseJSON() {
+            const input = document.getElementById('jsonInput').value.trim();
+            const resultDiv = document.getElementById('parseResult');
+            resultDiv.classList.remove('hidden');
+
+            try {
+                parsedData = JSON.parse(input);
+            } catch (e) {
+                resultDiv.innerHTML = '<div class="info error">❌ JSON 解析失败：' + e.message + '</div>';
+                return;
+            }
+
+            const sessionToken = parsedData.session_token || '';
+            const accessToken = parsedData.access_token || '';
+            const email = parsedData.email || '';
+            const planType = parsedData.plan_type || parsedData.chatgpt_plan_type || '';
+            const accountId = parsedData.chatgpt_account_id || parsedData.account_id || '';
+            const expired = parsedData.expired || '';
+
+            if (!sessionToken) {
+                resultDiv.innerHTML = '<div class="info error">❌ JSON 中缺少 session_token 字段</div>';
+                return;
+            }
+
+            // 显示解析信息
+            resultDiv.innerHTML = `
+                <div class="parsed-info">
+                    <table>
+                        <tr><td>📧 邮箱</td><td>${email}</td></tr>
+                        <tr><td>👤 姓名</td><td>${parsedData.name || '-'}</td></tr>
+                        <tr><td>📋 计划</td><td>${planType}</td></tr>
+                        <tr><td>🆔 Account ID</td><td>${accountId}</td></tr>
+                        <tr><td>⏰ 过期时间</td><td>${expired}</td></tr>
+                        <tr><td>🔑 Session Token</td><td>${sessionToken.substring(0, 30)}...</td></tr>
+                        <tr><td>🎫 Access Token</td><td>${accessToken ? accessToken.substring(0, 30) + '...' : '(无)'}</td></tr>
+                    </table>
+                </div>
+                <div class="info" style="margin-top:8px">✅ 解析成功，请进行第2步</div>
+            `;
+
+            // 生成控制台代码
+            generateConsoleCode(sessionToken);
+            generateBookmarklet(sessionToken);
+            generateWorkspaceCode(accountId);
+
+            document.getElementById('step2').classList.remove('hidden');
+            if (accountId) {
+                document.getElementById('step3').classList.remove('hidden');
+            }
+        }
+
+        function generateConsoleCode(sessionToken) {
+            // 设置 __Secure-next-auth.session-token cookie
+            const code = `// ChatGPT Session 注入
+document.cookie = "__Secure-next-auth.session-token=${sessionToken}; path=/; domain=.chatgpt.com; secure; samesite=lax; max-age=2592000";
+console.log("✅ Session token 已注入！正在刷新页面...");
+location.reload();`;
+            document.getElementById('consoleCode').textContent = code;
+        }
+
+        function generateBookmarklet(sessionToken) {
+            const code = `javascript:void(function(){if(!location.hostname.includes('chatgpt.com')){alert('请在 chatgpt.com 页面使用！');return;}document.cookie="__Secure-next-auth.session-token=${sessionToken}; path=/; domain=.chatgpt.com; secure; samesite=lax; max-age=2592000";alert('✅ 注入成功！页面即将刷新');location.reload();}())`;
+            document.getElementById('bookmarkletLink').href = code;
+        }
+
+        function generateWorkspaceCode(accountId) {
+            if (!accountId) return;
+            const code = `// 获取工作空间 access_token
+fetch('/api/auth/session', {
+    credentials: 'include',
+    headers: { 'accept': '*/*' }
+})
+.then(r => r.json())
+.then(data => {
+    if (data.accessToken) {
+        console.log("✅ Access Token (当前空间):");
+        console.log(data.accessToken);
+        console.log("\\n📋 Account ID: ${accountId}");
+        // 复制到剪贴板
+        navigator.clipboard.writeText(data.accessToken)
+            .then(() => console.log("\\n✅ 已复制到剪贴板！"))
+            .catch(() => console.log("\\n⚠️ 请手动复制上面的 token"));
+    } else {
+        console.log("❌ 未获取到 accessToken:", data);
+    }
+});`;
+            document.getElementById('workspaceCode').textContent = code;
+        }
+
+        function switchMethod(method) {
+            document.querySelectorAll('.method-tab').forEach(t => t.classList.remove('active'));
+            document.querySelectorAll('[id^="method-"]').forEach(d => d.classList.add('hidden'));
+            event.target.classList.add('active');
+            document.getElementById('method-' + method).classList.remove('hidden');
+        }
+
+        function copyCode(elementId) {
+            const code = document.getElementById(elementId).textContent;
+            navigator.clipboard.writeText(code).then(() => {
+                const btn = event.target;
+                const orig = btn.textContent;
+                btn.textContent = '✅ 已复制！';
+                btn.style.background = '#0d8c6d';
+                setTimeout(() => {
+                    btn.textContent = orig;
+                    btn.style.background = '';
+                }, 2000);
+            }).catch(() => {
+                // fallback
+                const textarea = document.createElement('textarea');
+                textarea.value = code;
+                document.body.appendChild(textarea);
+                textarea.select();
+                document.execCommand('copy');
+                document.body.removeChild(textarea);
+                alert('已复制到剪贴板！');
+            });
+        }
+
+        function loadSample() {
+            document.getElementById('jsonInput').value = JSON.stringify({
+                "type": "codex",
+                "email": "example@outlook.com",
+                "name": "Test User",
+                "plan_type": "k12",
+                "chatgpt_account_id": "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx",
+                "session_token": "eyJhbGciOiJkaXIi...(你的session_token)",
+                "access_token": "eyJhbGciOiJSUzI1...(你的access_token)",
+                "expired": "2026-10-11T08:29:46.537Z"
+            }, null, 2);
+        }
+    </script>
+</body>
+</html>
