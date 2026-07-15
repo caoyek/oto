@@ -182,7 +182,7 @@ function setTarget(target) {
   elements.sourceText.placeholder = isRepair
     ? '先粘贴 GPT Session / AT JSON，下面再上传带 refresh_token 和旧 access_token 的二验 JSON...'
     : isHealth
-      ? '粘贴账号 JSON，或输入订单号 LD260605E0DVIX；订单号查询请先安装 LDXP 自动抓取，或附加 Merchant-Token: xxx...'
+      ? '粘贴带 access_token / refresh_token 的账号 JSON，点击“转换”后在浏览器本地直连 OpenAI 测活...'
       : isCpa
         ? '粘贴 GPT AT、RT 授权链接、SUB、CPA JSON，点击 CPA 后输出 CPA...'
         : '粘贴 GPT AT、RT 授权链接、CPA、SUB JSON，点击 SUB 后输出 Sub2API...'
