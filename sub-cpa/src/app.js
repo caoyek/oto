@@ -26,7 +26,6 @@ const HEALTH_ME_PROBE_ATTEMPTS = 3
 const HEALTH_REFRESH_ATTEMPTS = 2
 const HEALTH_RETRY_BASE_DELAY_MS = 350
 const HEALTH_TOKEN_EXPIRY_SKEW_MS = 60_000
-const LDXP_ORDER_NO_PATTERN = /\bLD\d{6}[A-Z0-9]{4,}\b/gi
 
 const state = {
   target: 'sub',
@@ -265,7 +264,7 @@ async function resolvePostHealthConversionInput(input, options = {}) {
   const healthFilter = getCurrentHealthFilter()
   const sourceInput = healthFilter
     ? firstString(healthFilter.conversionInput, input)
-    : await resolveOrderNumberConversionInput(input)
+    : input
   if (!healthFilter) return sourceInput
 
   const decision = buildHealthFilterDecision(sourceInput, healthFilter.report)
@@ -286,24 +285,6 @@ async function resolvePostHealthConversionInput(input, options = {}) {
   return decision.filteredInput
 }
 
-async function resolveOrderNumberConversionInput(input) {
-  const orderNos = extractLdxpOrderNos(input)
-  if (!orderNos.length) return input
-
-  updateStats({
-    count: orderNos.length,
-    missingRefreshToken: 0,
-    format: currentOutputLabel(),
-    warnings: []
-  }, `正在查询订单卡密：0/${orderNos.length}（仅自营订单可读取）`)
-
-  const payload = await fetchOrderCardsPayload(input)
-  const cardText = firstString(payload?.card_text, payload?.cardText)
-  if (!cardText) {
-    throw new Error('订单接口没有返回可转换卡密')
-  }
-  return cardText
-}
 
 function rememberLatestHealthFilter(sourceInput, result, fallbackInput) {
   const report = result?.report
@@ -435,11 +416,6 @@ async function runBrowserHealthCheck(input) {
     throw new Error('当前浏览器不支持直接测活')
   }
 
-  const orderNos = extractLdxpOrderNos(input)
-  if (orderNos.length) {
-    return runOrderHealthCheck(input)
-  }
-
   const directIds = extractAdminAccountIds(input)
   if (directIds.length) {
     const accounts = directIds.map((id, index) => ({
@@ -455,118 +431,6 @@ async function runBrowserHealthCheck(input) {
 
   const accounts = convertInputToSub(input).payload.accounts || []
   return formatHealthReport(await runBrowserCredentialTests(accounts))
-}
-
-async function runOrderHealthCheck(input) {
-  const orderNos = extractLdxpOrderNos(input)
-  publishOrderLookupProgress(orderNos)
-
-  const payload = await fetchOrderCardsPayload(input)
-  const cardText = firstString(payload?.card_text, payload?.cardText)
-  if (!cardText) {
-    throw new Error('订单接口没有返回可测活卡密')
-  }
-
-  const accounts = convertInputToSub(cardText).payload.accounts || []
-  if (!accounts.length) {
-    throw new Error('订单卡密里没有解析到可测活账号')
-  }
-
-  const orderOptions = {
-    directCredentials: true,
-    orderQuery: true,
-    sourceOrders: Array.isArray(payload?.source_orders) && payload.source_orders.length ? payload.source_orders : orderNos,
-    orderLookup: Array.isArray(payload?.order_lookup) ? payload.order_lookup : []
-  }
-  publishHealthProgress(accounts, [], 0, orderOptions)
-
-  const report = attachOrderHealthMeta(await runBrowserCredentialTests(accounts, orderOptions), orderOptions)
-  const formatted = formatHealthReport(report)
-  formatted.healthSourceInput = cardText
-  return formatted
-}
-
-async function fetchOrderCardsPayload(input) {
-  const response = await fetch('/api/order-cards', {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json'
-    },
-    body: JSON.stringify({ input })
-  })
-
-  const text = await response.text()
-  let payload = null
-  if (text.trim()) {
-    try {
-      payload = JSON.parse(text)
-    } catch {
-      payload = { message: text.slice(0, 300) }
-    }
-  }
-
-  if (!response.ok || payload?.ok === false) {
-    const message = firstString(payload?.message, `订单号查询请求失败：HTTP ${response.status}`)
-    const hint = firstString(payload?.hint)
-    throw new Error(hint && !message.includes(hint) ? `${message}\n${hint}` : message)
-  }
-
-  return payload
-}
-
-function publishOrderLookupProgress(orderNos) {
-  if (state.target !== 'health' || !orderNos.length) return
-  const total = orderNos.length
-  const report = {
-    type: 'ldxp-order-lookup-progress',
-    generated_at: new Date().toISOString(),
-    method: 'ldxp-order-query-progress',
-    target_model: HEALTH_REPLY_MODEL,
-    total,
-    usable: 0,
-    unusable: 0,
-    usage_limited: 0,
-    refreshed: 0,
-    failed: 0,
-    source_orders: orderNos,
-    order_lookup: [],
-    progress: {
-      current: 0,
-      completed: 0,
-      total,
-      percent: 0,
-      done: false
-    },
-    results: orderNos.map((orderNo, index) => ({
-      source: 'ldxp-order-query',
-      index: index + 1,
-      id: orderNo,
-      name: orderNo,
-      email: '-',
-      usable: false,
-      status: 'testing',
-      model: HEALTH_REPLY_MODEL,
-      reply: '',
-      message: '正在查询订单卡密（仅自营订单可读取）...',
-      has_access_token: true,
-      has_refresh_token: true,
-      checked_at: ''
-    }))
-  }
-  state.latestHealthReport = report
-  setLatestOutput(JSON.stringify(report, null, 2))
-  renderHealthReport(report)
-  updateStats(formatHealthReport(report).meta, `正在查询订单卡密：0/${total}（仅自营订单可读取）`)
-}
-
-function attachOrderHealthMeta(report, options = {}) {
-  const method = firstString(report?.method, 'local-node-gpt5.5-reply-probe')
-  return {
-    ...report,
-    method: method.includes('ldxp-order-query') ? method : `${method}+ldxp-order-query`,
-    source_orders: Array.isArray(options.sourceOrders) ? options.sourceOrders : [],
-    order_lookup: Array.isArray(options.orderLookup) ? options.orderLookup : []
-  }
 }
 
 async function tryAdminAccountHealthCheck(convertedAccounts) {
@@ -2633,17 +2497,6 @@ function utf8Bytes(value) {
 }
 
 function inspectCurrentInput(text) {
-  const orderInspection = inspectOrderNumberConversionInput(text)
-  if (orderInspection) {
-    updateStats({
-      count: orderInspection.count,
-      missingRefreshToken: orderInspection.missingRefreshToken,
-      format: currentOutputLabel(),
-      warnings: []
-    }, `已识别 ${orderInspection.label}`)
-    return orderInspection
-  }
-
   const inspection = inspectInputFormat(text)
   updateStats({
     count: inspection.count,
@@ -2654,29 +2507,7 @@ function inspectCurrentInput(text) {
   return inspection
 }
 
-function inspectOrderNumberConversionInput(text) {
-  if (state.target !== 'sub' && state.target !== 'cpa') return null
-  const orderNos = extractLdxpOrderNos(text)
-  if (!orderNos.length) return null
-  return {
-    kind: 'order',
-    label: 'LDXP 订单号（仅自营订单可转）',
-    count: orderNos.length,
-    missingRefreshToken: 0
-  }
-}
-
 function inspectHealthInput(text) {
-  const orderNos = extractLdxpOrderNos(text)
-  if (orderNos.length) {
-    return {
-      count: orderNos.length,
-      missingRefreshToken: 0,
-      label: 'LDXP 订单号',
-      status: `待按订单号查询并测活 ${orderNos.length} 个订单（仅自营订单可读取卡密）`
-    }
-  }
-
   const adminIds = extractAdminAccountIds(text)
   if (adminIds.length) {
     return {
@@ -2692,14 +2523,6 @@ function inspectHealthInput(text) {
     ...inspection,
     status: '待测活 GPT5.5'
   }
-}
-
-function extractLdxpOrderNos(input) {
-  const ids = new Set()
-  for (const match of String(input ?? '').toUpperCase().matchAll(LDXP_ORDER_NO_PATTERN)) {
-    ids.add(match[0])
-  }
-  return [...ids]
 }
 
 function handleDragEnter(event) {
