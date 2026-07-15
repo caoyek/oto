@@ -1,4 +1,4 @@
-import { buildCpaZip, convertInputToCpa, convertInputToSub, extractAdminAccountIds, inspectInputFormat, repairSecondVerifyJson, sliceSubPayload } from './converter.js'
+import { buildCpaZip, convertInputToCpa, convertInputToSub, inspectInputFormat, repairSecondVerifyJson, sliceSubPayload } from './converter.js'
 
 const CODEX_AUTH_ENDPOINT = 'https://auth.openai.com/oauth/authorize'
 const CODEX_TOKEN_ENDPOINT = 'https://auth.openai.com/oauth/token'
@@ -10,7 +10,6 @@ const CODEX_PKCE_STORAGE_PREFIX = 'sub-cpa-converter:codex-pkce:'
 const OPENAI_ME_ENDPOINT = 'https://api.openai.com/v1/me'
 const OPENAI_RESPONSES_ENDPOINT = 'https://api.openai.com/v1/responses'
 const OPENAI_CHAT_COMPLETIONS_ENDPOINT = 'https://api.openai.com/v1/chat/completions'
-const ADMIN_API_BASE = 'https://aasfa.xgrok.xdo.icu/api/v1'
 const HEALTH_REPLY_MODEL = 'gpt-5.5'
 const HEALTH_REPLY_MODEL_ALIASES = [HEALTH_REPLY_MODEL, 'gpt5.5']
 const HEALTH_REPLY_PROMPT = '请只回复两个字：可用'
@@ -397,14 +396,7 @@ function getResultStatus(result) {
 }
 
 async function runLocalHealthCheck(input) {
-  try {
-    return await runBrowserHealthCheck(input)
-  } catch (error) {
-    if (!canUseLocalHealthFallback() || containsSensitiveCredentialInput(input)) {
-      throw error
-    }
-    return runServerHealthCheck(input)
-  }
+  return runBrowserHealthCheck(input)
 }
 
 function containsSensitiveCredentialInput(input) {
@@ -416,105 +408,8 @@ async function runBrowserHealthCheck(input) {
     throw new Error('当前浏览器不支持直接测活')
   }
 
-  const directIds = extractAdminAccountIds(input)
-  if (directIds.length) {
-    const accounts = directIds.map((id, index) => ({
-      id,
-      index: index + 1,
-      name: id,
-      email: ''
-    }))
-    const proxyReport = await runProxyHealthTestsWithProgress(accounts)
-    if (proxyReport) return formatHealthReport(proxyReport)
-    return formatHealthReport(await runAdminAccountTests(accounts))
-  }
-
   const accounts = convertInputToSub(input).payload.accounts || []
   return formatHealthReport(await runBrowserCredentialTests(accounts))
-}
-
-async function tryAdminAccountHealthCheck(convertedAccounts) {
-  let adminAccounts
-  try {
-    adminAccounts = await loadAdminAccounts()
-  } catch {
-    return null
-  }
-
-  const wantedKeys = buildWantedAdminAccountKeys(convertedAccounts)
-  const matched = adminAccounts
-    .filter((account) => {
-      const keys = buildAdminAccountKeys(account)
-      return keys.some((key) => wantedKeys.has(key))
-    })
-    .map((account, index) => ({
-      id: getAdminAccountId(account),
-      index: index + 1,
-      name: getAdminAccountName(account),
-      email: getAdminAccountEmail(account),
-      raw: account
-    }))
-    .filter((account) => account.id)
-
-  if (!matched.length) return null
-  return runAdminAccountTests(matched)
-}
-
-async function runAdminAccountTests(accounts) {
-  const proxyReport = await tryAdminAccountProxyTests(accounts)
-  if (proxyReport) return proxyReport
-
-  const results = []
-  for (let start = 0; start < accounts.length; start += HEALTH_TEST_CONCURRENCY) {
-    const batch = accounts.slice(start, start + HEALTH_TEST_CONCURRENCY)
-    const batchResults = await Promise.all(batch.map((account, offset) => testAdminAccount(account, start + offset)))
-    results.push(...batchResults)
-  }
-
-  return buildAdminHealthReport(results)
-}
-
-async function testAdminAccount(account, index) {
-  try {
-    const payload = await adminApiFetch(`/admin/accounts/${encodeURIComponent(account.id)}/test`, {
-      method: 'POST',
-      body: JSON.stringify({
-        model_id: HEALTH_REPLY_MODEL,
-        prompt: HEALTH_REPLY_PROMPT
-      })
-    })
-    const test = normalizeAdminTestResult(payload)
-    const message = firstString(test.message, test.success ? '后台接口测试可用' : '后台接口测试不可用')
-    return {
-      source: 'sub2api-admin-api',
-      index: account.index || index + 1,
-      id: account.id,
-      name: firstString(account.name, account.email, account.id),
-      email: firstString(account.email),
-      usable: test.success,
-      status: test.success ? 'usable' : normalizeHealthFailureStatus(message, 'unusable'),
-      model: firstString(test.model, HEALTH_REPLY_MODEL),
-      reply: firstString(test.reply),
-      message,
-      checked_at: new Date().toISOString(),
-      response: test.data
-    }
-  } catch (error) {
-    const message = normalizeAdminApiErrorMessage(error.message || '后台测试接口不可用')
-    return {
-      source: 'sub2api-admin-api',
-      index: account.index || index + 1,
-      id: account.id,
-      name: firstString(account.name, account.email, account.id),
-      email: firstString(account.email),
-      usable: false,
-      status: normalizeHealthFailureStatus(message, 'admin_test_failed'),
-      model: HEALTH_REPLY_MODEL,
-      reply: '',
-      message,
-      checked_at: new Date().toISOString()
-    }
-  }
 }
 
 async function runBrowserCredentialTests(accounts, options = {}) {
@@ -538,7 +433,7 @@ async function runBrowserCredentialTests(accounts, options = {}) {
     publishHealthProgress(accounts, results, currentIndex, progressOptions)
   }
   const stabilizedResults = await recheckBrowserTestFailures(accounts, results, progressOptions)
-  return buildCredentialHealthReport(stabilizedResults, options.orderQuery ? 'browser-direct-openai-me-probe+ldxp-order-query' : 'browser-direct-openai-me-probe', { batchHistory })
+  return buildCredentialHealthReport(stabilizedResults, 'browser-direct-openai-me-probe', { batchHistory })
 }
 
 async function recheckBrowserTestFailures(accounts, results, progressOptions = {}) {
@@ -619,40 +514,6 @@ function buildBrowserHealthBatchHistoryItem(batchNumber, startIndex, batchResult
   }
 }
 
-async function runProxyHealthTestsWithProgress(accounts, options = {}) {
-  if (location.protocol !== 'http:' && location.protocol !== 'https:') return null
-  if (!Array.isArray(accounts) || !accounts.length) return null
-
-  const normalizedAccounts = accounts.map((account, index) => ({
-    ...objectOrEmpty(account),
-    index: Number(account?.index) || index + 1
-  }))
-  const results = []
-  for (let start = 0; start < normalizedAccounts.length; start += HEALTH_TEST_CONCURRENCY) {
-    const batch = normalizedAccounts.slice(start, start + HEALTH_TEST_CONCURRENCY)
-    publishHealthProgress(normalizedAccounts, results, start, options)
-    const batchResults = await Promise.all(batch.map(async (account, offset) => {
-      const index = start + offset
-      const report = await tryAdminAccountProxyTests([account], options)
-      return {
-        report,
-        account,
-        index
-      }
-    }))
-
-    const missingProxy = batchResults.find((item) => !item.report)
-    if (missingProxy) {
-      return results.length ? buildHealthProgressReport(normalizedAccounts, results, start, options, { done: false }) : null
-    }
-
-    results.push(...batchResults.map((item) => normalizeProgressResult(item.report, item.account, item.index)))
-    publishHealthProgress(normalizedAccounts, results, start + batch.length, options)
-  }
-
-  return buildHealthProgressReport(normalizedAccounts, results, normalizedAccounts.length, options, { done: true })
-}
-
 function publishHealthProgress(accounts, completedResults, currentIndex, options = {}) {
   if (state.target !== 'health') return
   const report = buildHealthProgressReport(accounts, completedResults, currentIndex, options)
@@ -674,18 +535,15 @@ function buildHealthProgressReport(accounts, completedResults, currentIndex, opt
       return buildPendingHealthResult(account, pendingIndex, pendingIndex === normalizedCurrent, options)
     })
   ]
-  const isDirect = options.directCredentials === true
   const failed = completedResults.filter(isHealthTestFailed).length
   const usageLimited = completedResults.filter(isHealthUsageLimited).length
   const refreshed = completedResults.filter((item) => item.refreshed === true).length
-  const baseMethod = isDirect
-    ? (options.browserFallback ? 'browser-direct-openai-me-probe-progress' : 'local-node-gpt5.5-reply-probe-progress')
-    : 'sub2api-admin-account-test-proxy-progress'
+  const baseMethod = options.browserFallback ? 'browser-direct-openai-me-probe-progress' : 'local-node-gpt5.5-reply-probe-progress'
   return {
-    type: isDirect ? 'local-account-health-result' : 'sub2api-admin-account-health-result',
+    type: 'local-account-health-result',
     generated_at: new Date().toISOString(),
-    method: options.orderQuery ? `${baseMethod}+ldxp-order-query` : baseMethod,
-    endpoint: isDirect ? (options.browserFallback ? OPENAI_ME_ENDPOINT : '/api/admin-account-test direct_credentials') : '/api/v1/admin/accounts/{id}/test',
+    method: baseMethod,
+    endpoint: OPENAI_ME_ENDPOINT,
     target_model: options.browserFallback ? OPENAI_ME_ENDPOINT : HEALTH_REPLY_MODEL,
     model_aliases: HEALTH_REPLY_MODEL_ALIASES,
     total,
@@ -701,10 +559,6 @@ function buildHealthProgressReport(accounts, completedResults, currentIndex, opt
       percent: total ? Math.round((doneCount / total) * 100) : 100,
       done: extra.done === true || doneCount >= total
     },
-    ...(options.orderQuery ? {
-      source_orders: Array.isArray(options.sourceOrders) ? options.sourceOrders : [],
-      order_lookup: Array.isArray(options.orderLookup) ? options.orderLookup : []
-    } : {}),
     results
   }
 }
@@ -765,50 +619,6 @@ function buildHealthProgressStatus(report) {
   return total ? `正在测活 GPT5.5：${completed}/${total}（并发 ${HEALTH_TEST_CONCURRENCY}）` : '正在测活 GPT5.5...'
 }
 
-async function tryAdminAccountProxyTests(accounts, options = {}) {
-  if (location.protocol !== 'http:' && location.protocol !== 'https:') return null
-
-  try {
-    const response = await fetch('/api/admin-account-test', {
-      method: 'POST',
-      headers: {
-        Accept: 'application/json',
-        'Content-Type': 'application/json'
-      },
-      body: JSON.stringify({
-        accounts,
-        direct_credentials: options.directCredentials === true
-      })
-    })
-    const payload = await readBrowserPayload(response)
-    if (response.status === 404 || response.status === 405) return null
-    if (!response.ok || payload?.ok === false) {
-      throw new Error(readBrowserMessage(payload, `HTTP ${response.status}`))
-    }
-    return payload?.report || payload
-  } catch (error) {
-    if (/404|405|Failed to fetch|资源不存在|只支持 GET\/HEAD/i.test(error.message || '')) return null
-    return buildAdminCallFailureReport(accounts, normalizeAdminApiErrorMessage(error.message || '后台代理测试接口不可用'))
-  }
-}
-
-function buildAdminCallFailureReport(accounts, message) {
-  const results = accounts.map((account, index) => ({
-    source: 'sub2api-admin-api-proxy',
-    index: account.index || index + 1,
-    id: account.id,
-    name: firstString(account.name, account.email, account.id),
-    email: firstString(account.email),
-    usable: false,
-    status: normalizeHealthFailureStatus(message, 'admin_test_failed'),
-    model: HEALTH_REPLY_MODEL,
-    reply: '',
-    message,
-    checked_at: new Date().toISOString()
-  }))
-  return buildAdminHealthReport(results, 'sub2api-admin-account-test-proxy')
-}
-
 function buildCredentialHealthReport(results, method, options = {}) {
   const browserDirectMe = /browser-direct-openai-me/i.test(firstString(method))
   return {
@@ -856,271 +666,10 @@ function buildBrowserHealthDiagnostics(results, options = {}) {
   }
 }
 
-function buildAdminHealthReport(results, method = 'sub2api-admin-account-test') {
-  return {
-    type: 'sub2api-admin-account-health-result',
-    generated_at: new Date().toISOString(),
-    method,
-    endpoint: '/api/v1/admin/accounts/{id}/test',
-    target_model: HEALTH_REPLY_MODEL,
-    total: results.length,
-    usable: results.filter((item) => item.usable).length,
-    unusable: results.filter((item) => !item.usable && !isHealthTestFailed(item) && !isHealthUsageLimited(item)).length,
-    usage_limited: results.filter(isHealthUsageLimited).length,
-    refreshed: results.filter((item) => item.refreshed === true).length,
-    failed: results.filter(isHealthTestFailed).length,
-    results
-  }
-}
-
-function normalizeAdminApiErrorMessage(message) {
-  const text = firstString(message, '后台测试接口不可用')
-  if (/Failed to fetch|NetworkError|Load failed/i.test(text)) {
-    return '浏览器无法访问后台测试接口（跨域、网络不可达或未开放当前页面来源）'
-  }
-  if (/401|Unauthorized|unauthorized|未授权|未登录/i.test(text)) {
-    return '后台未登录或当前登录态无权限'
-  }
-  if (/403|Forbidden|forbidden|禁止访问/i.test(text)) {
-    return '后台拒绝访问当前账号测试接口'
-  }
-  return text
-}
-
-async function loadAdminAccounts() {
-  const accounts = []
-  const pageSize = 100
-  const maxPages = 200
-  for (let page = 1; page <= maxPages; page += 1) {
-    const payload = await adminApiFetch(`/admin/accounts?page=${page}&page_size=${pageSize}`, { method: 'GET' })
-    const rows = toAdminArray(payload)
-    accounts.push(...rows)
-    const total = getAdminTotal(payload)
-    if (!rows.length || (total && accounts.length >= total) || rows.length < pageSize) break
-  }
-  return accounts
-}
-
-async function adminApiFetch(path, options = {}) {
-  const bases = getAdminApiBases()
-  const errors = []
-  for (const base of bases) {
-    try {
-      const headers = {
-        Accept: 'application/json',
-        'Content-Type': 'application/json',
-        ...(options.headers || {})
-      }
-      const authToken = firstString(localStorage.getItem('auth_token'))
-      if (authToken) headers.Authorization = `Bearer ${authToken}`
-      const response = await fetch(`${base}${path}`, {
-        credentials: 'include',
-        ...options,
-        headers
-      })
-      const payload = await readBrowserPayload(response)
-      if (!response.ok) {
-        throw new Error(readBrowserMessage(payload, `${response.status} ${response.statusText}`))
-      }
-      return payload
-    } catch (error) {
-      errors.push(`${base}: ${error.message || error}`)
-    }
-  }
-  throw new Error(errors[errors.length - 1] || errors[0] || '后台测试接口不可访问')
-}
-
-function getAdminApiBases() {
-  const bases = []
-  if (location.protocol === 'http:' || location.protocol === 'https:') {
-    bases.push(`${location.origin}/api/v1`)
-  }
-  bases.push(ADMIN_API_BASE)
-  return [...new Set(bases.map((base) => base.replace(/\/+$/, '')))]
-}
-
-function normalizeAdminTestResult(payload) {
-  const sse = normalizeAdminSseTestResult(payload)
-  if (sse) return sse
-
-  const data = unwrapAdminPayload(payload)
-  const explicit = data && typeof data === 'object'
-    ? (data.success ?? data.ok ?? data.passed ?? data.healthy ?? data.available)
-    : undefined
-  return {
-    success: explicit === undefined ? true : Boolean(explicit),
-    model: firstString(data?.model, data?.test_model, data?.request?.model),
-    reply: firstString(data?.reply, data?.response, data?.content, data?.output_text),
-    message: firstString(data?.message, data?.error, data?.reason, data?.status),
-    data
-  }
-}
-
-function normalizeAdminSseTestResult(payload) {
-  const rawText = firstString(payload?.__rawText, typeof payload === 'string' ? payload : '')
-  if (!rawText) return null
-
-  const events = parseSseDataEvents(rawText)
-  if (!events.length) {
-    const text = rawText.slice(0, 300)
-    return /error|not found|failed|unauthorized|forbidden/i.test(text)
-      ? { success: false, model: HEALTH_REPLY_MODEL, reply: '', message: text, data: { raw: text } }
-      : null
-  }
-
-  const errorEvent = events.find((event) => {
-    const type = firstString(event?.type).toLowerCase()
-    return type === 'error' || firstString(event?.error)
-  })
-  if (errorEvent) {
-    return {
-      success: false,
-      model: firstString(errorEvent.model, HEALTH_REPLY_MODEL),
-      reply: firstString(errorEvent.reply, errorEvent.content),
-      message: firstString(errorEvent.error, errorEvent.message, '后台接口测试不可用'),
-      data: errorEvent
-    }
-  }
-
-  const completeEvent = [...events].reverse().find((event) => firstString(event?.type) === 'test_complete')
-  if (completeEvent) {
-    const explicit = completeEvent.success ?? completeEvent.ok ?? completeEvent.passed ?? completeEvent.healthy ?? completeEvent.available
-    return {
-      success: explicit === undefined ? true : Boolean(explicit),
-      model: firstString(completeEvent.model, HEALTH_REPLY_MODEL),
-      reply: firstString(completeEvent.reply, completeEvent.content, completeEvent.output_text),
-      message: firstString(completeEvent.message, completeEvent.status, '后台接口测试完成'),
-      data: completeEvent
-    }
-  }
-
-  const lastEvent = events[events.length - 1]
-  return {
-    success: false,
-    model: firstString(lastEvent?.model, HEALTH_REPLY_MODEL),
-    reply: firstString(lastEvent?.reply, lastEvent?.content, lastEvent?.output_text),
-    message: firstString(lastEvent?.message, lastEvent?.status, '后台测试流未返回完成事件'),
-    data: lastEvent
-  }
-}
-
-function parseSseDataEvents(text) {
-  const events = []
-  const dataLines = []
-  const flush = () => {
-    if (!dataLines.length) return
-    const data = dataLines.join('\n').trim()
-    dataLines.length = 0
-    if (!data || data === '[DONE]') return
-    try {
-      events.push(JSON.parse(data))
-    } catch {
-      events.push({ type: 'message', message: data.slice(0, 300) })
-    }
-  }
-
-  for (const line of String(text).split(/\r?\n/)) {
-    if (line.startsWith('data:')) {
-      dataLines.push(line.slice(5).trimStart())
-      continue
-    }
-    if (!line.trim()) flush()
-  }
-  flush()
-  return events
-}
-
-function toAdminArray(payload) {
-  const value = unwrapAdminPayload(payload)
-  if (Array.isArray(value)) return value
-  if (!value || typeof value !== 'object') return []
-  return value.items || value.records || value.list || value.accounts || value.data || []
-}
-
-function getAdminTotal(payload) {
-  const value = unwrapAdminPayload(payload)
-  if (!value || typeof value !== 'object') return 0
-  return Number(value.total || value.count || value.total_count || 0) || 0
-}
-
-function unwrapAdminPayload(payload) {
-  if (payload && typeof payload === 'object' && payload.code === 0 && 'data' in payload) return payload.data
-  if (payload && typeof payload === 'object' && 'data' in payload && !Array.isArray(payload.data)) return payload.data
-  return payload
-}
-
-function buildWantedAdminAccountKeys(accounts) {
-  const keys = new Set()
-  accounts.forEach((account) => {
-    const credentials = objectOrEmpty(account.credentials)
-    addAccountKey(keys, account.name)
-    addAccountKey(keys, credentials.email)
-    addAccountKey(keys, credentials.chatgpt_account_id)
-  })
-  return keys
-}
-
-function buildAdminAccountKeys(account) {
-  const credentials = objectOrEmpty(account.credentials)
-  const keys = new Set()
-  addAccountKey(keys, account.name)
-  addAccountKey(keys, account.email)
-  addAccountKey(keys, credentials.email)
-  addAccountKey(keys, credentials.chatgpt_account_id)
-  return [...keys]
-}
-
-function addAccountKey(keys, value) {
-  const text = firstString(value).toLowerCase()
-  if (text) keys.add(text)
-}
-
-function getAdminAccountId(account) {
-  return firstString(account?.id, account?._id, account?.account?.id)
-}
-
-function getAdminAccountName(account) {
-  return firstString(account?.name, account?.email, account?.credentials?.email, account?.account_id, account?.id)
-}
-
-function getAdminAccountEmail(account) {
-  return firstString(account?.email, account?.credentials?.email, validEmailFromText(account?.name))
-}
-
 function validEmailFromText(value) {
   const text = firstString(value)
   const match = text.match(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/i)
   return match?.[0] || ''
-}
-
-async function runServerHealthCheck(input) {
-  const response = await fetch('/api/local-health', {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json'
-    },
-    body: JSON.stringify({ input })
-  })
-
-  const text = await response.text()
-  let payload = null
-  if (text.trim()) {
-    try {
-      payload = JSON.parse(text)
-    } catch {
-      payload = { message: text.slice(0, 300) }
-    }
-  }
-
-  if (!response.ok || payload?.ok === false) {
-    const message = payload?.message || `本地测活请求失败：HTTP ${response.status}`
-    throw new Error(message.includes('资源不存在')
-      ? '当前访问地址没有启用测活接口'
-      : message)
-  }
-
-  const report = payload?.report || payload
-  return formatHealthReport(report)
 }
 
 function formatHealthReport(report) {
@@ -1144,11 +693,6 @@ function formatHealthReport(report) {
       warnings: []
     }
   }
-}
-
-function canUseLocalHealthFallback() {
-  const host = window.location.hostname.toLowerCase()
-  return host === '127.0.0.1' || host === 'localhost' || host === '::1' || host === '[::1]'
 }
 
 async function testBrowserAccount(account, context) {
@@ -2508,16 +2052,6 @@ function inspectCurrentInput(text) {
 }
 
 function inspectHealthInput(text) {
-  const adminIds = extractAdminAccountIds(text)
-  if (adminIds.length) {
-    return {
-      count: adminIds.length,
-      missingRefreshToken: 0,
-      label: 'Sub2API 后台账号 ID',
-      status: `待测活后台账号 ${adminIds.length} 个`
-    }
-  }
-
   const inspection = inspectInputFormat(text)
   return {
     ...inspection,
