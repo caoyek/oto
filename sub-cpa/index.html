@@ -13,7 +13,7 @@
         <div class="brand">
           <span>本地转换 · 不上传凭证</span>
           <h1>Sub / CPA 互转</h1>
-          <p>先登录 Codex 或粘贴/拖入 JSON，再选择输出目标：CPA、SUB、二验修正或本地测活。</p>
+          <p>先登录 Codex 或粘贴/拖入 JSON，再选择输出目标：CPA、SUB、二验修正、本地测活或 Session 注入。</p>
         </div>
 
         <div class="topbar__right">
@@ -27,6 +27,7 @@
             <button id="targetSub" class="segmented__item is-active" type="button">SUB</button>
             <button id="targetRepair" class="segmented__item" type="button">二验修正</button>
             <button id="targetHealth" class="segmented__item" type="button">本地测活</button>
+            <button id="targetInject" class="segmented__item" type="button">Session 注入</button>
           </div>
           <button id="pasteDemo" class="button button--quiet" type="button">示例</button>
         </div>
@@ -103,6 +104,7 @@
           </div>
 
           <div id="healthResult" class="health-result" hidden></div>
+          <div id="injectResult" class="inject-result" hidden></div>
           <textarea id="outputText" spellcheck="false" readonly placeholder="转换结果会显示在这里"></textarea>
         </section>
       </section>

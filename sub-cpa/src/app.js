@@ -33,6 +33,7 @@ const state = {
   outputSignature: '',
   latestHealthReport: null,
   latestHealthFilter: null,
+  latestInjectData: null,
   repairDocuments: [],
   codexAuth: {
     url: '',
@@ -50,10 +51,12 @@ const elements = {
   targetSub: document.querySelector('#targetSub'),
   targetRepair: document.querySelector('#targetRepair'),
   targetHealth: document.querySelector('#targetHealth'),
+  targetInject: document.querySelector('#targetInject'),
   codexLogin: document.querySelector('#codexLogin'),
   sourceText: document.querySelector('#sourceText'),
   outputText: document.querySelector('#outputText'),
   healthResult: document.querySelector('#healthResult'),
+  injectResult: document.querySelector('#injectResult'),
   fileInput: document.querySelector('#fileInput'),
   repairUpload: document.querySelector('#repairUpload'),
   repairFileInput: document.querySelector('#repairFileInput'),
@@ -106,6 +109,17 @@ elements.targetHealth.addEventListener('click', () => {
   setTarget('health')
   convertIfInput()
 })
+elements.targetInject.addEventListener('click', () => {
+  setTarget('inject')
+  convertIfInput()
+})
+elements.injectResult.addEventListener('click', (event) => {
+  const trigger = event.target.closest('[data-copy-target]')
+  if (!trigger) return
+  const source = elements.injectResult.querySelector(`#${trigger.getAttribute('data-copy-target')}`)
+  if (!source) return
+  copyTextToClipboard(source.textContent, trigger)
+})
 elements.convertNow.addEventListener('click', () => {
   void convertCurrent({ allowHealthFilterPrompt: true })
 })
@@ -121,6 +135,7 @@ elements.clearAll.addEventListener('click', () => {
   state.latestOutput = ''
   state.latestHealthReport = null
   state.latestHealthFilter = null
+  state.latestInjectData = null
   state.repairDocuments = []
   updateRepairStatus()
   resetDownloadCursor()
@@ -171,27 +186,31 @@ function setTarget(target) {
   const isCpa = target === 'cpa'
   const isRepair = target === 'repair'
   const isHealth = target === 'health'
+  const isInject = target === 'inject'
   elements.targetCpa.classList.toggle('is-active', isCpa)
   elements.targetSub.classList.toggle('is-active', target === 'sub')
   elements.targetRepair.classList.toggle('is-active', isRepair)
   elements.targetHealth.classList.toggle('is-active', isHealth)
+  elements.targetInject.classList.toggle('is-active', isInject)
   elements.repairUpload.hidden = !isRepair
   elements.repairUpload.closest('.panel')?.classList.toggle('is-repair-mode', isRepair)
-  elements.inputTitle.textContent = isRepair ? 'Session / AT 输入' : isHealth ? '本地测活输入' : '输入 JSON'
-  elements.outputTitle.textContent = isRepair ? '二验修正输出' : isHealth ? '本地测活结果' : isCpa ? 'CPA 输出' : 'SUB 输出'
+  elements.inputTitle.textContent = isRepair ? 'Session / AT 输入' : isHealth ? '本地测活输入' : isInject ? 'Session 注入输入' : '输入 JSON'
+  elements.outputTitle.textContent = isRepair ? '二验修正输出' : isHealth ? '本地测活结果' : isInject ? 'Session 注入代码' : isCpa ? 'CPA 输出' : 'SUB 输出'
   elements.sourceText.placeholder = isRepair
     ? '先粘贴 GPT Session / AT JSON，下面再上传带 refresh_token 和旧 access_token 的二验 JSON...'
     : isHealth
       ? '粘贴带 access_token / refresh_token 的账号 JSON，点击“转换”后在浏览器本地直连 OpenAI 测活...'
-      : isCpa
-        ? '粘贴 GPT AT、RT 授权链接、SUB、CPA JSON，点击 CPA 后输出 CPA...'
-        : '粘贴 GPT AT、RT 授权链接、CPA、SUB JSON，点击 SUB 后输出 Sub2API...'
+      : isInject
+        ? '粘贴导出的 CPA / Session JSON（需含 session_token），点击“转换”生成 chatgpt.com 免密登录注入代码...'
+        : isCpa
+          ? '粘贴 GPT AT、RT 授权链接、SUB、CPA JSON，点击 CPA 后输出 CPA...'
+          : '粘贴 GPT AT、RT 授权链接、CPA、SUB JSON，点击 SUB 后输出 Sub2API...'
   refreshOutputPreview()
   updateStats({ count: 0, missingRefreshToken: 0, format: currentOutputLabel(), warnings: [] }, '待转换')
 }
 
 function nextTarget() {
-  const targets = ['sub', 'cpa', 'repair', 'health']
+  const targets = ['sub', 'cpa', 'repair', 'health', 'inject']
   const index = targets.indexOf(state.target)
   return targets[(index + 1) % targets.length]
 }
@@ -222,6 +241,7 @@ async function convertCurrent(options = {}) {
     }
     const result = await buildCurrentResult(preparedInput)
     state.latestHealthReport = isHealthRun ? result.report : null
+    state.latestInjectData = state.target === 'inject' ? result.inject : null
     if (isHealthRun) {
       rememberLatestHealthFilter(input, result, conversionInput)
     }
@@ -251,6 +271,9 @@ async function buildCurrentResult(input) {
   }
   if (state.target === 'health') {
     return runLocalHealthCheck(input)
+  }
+  if (state.target === 'inject') {
+    return buildSessionInjectResult(input)
   }
   return state.target === 'sub'
     ? convertInputToSub(input)
@@ -391,6 +414,9 @@ function getResultStatus(result) {
     if (result.meta.refreshed) parts.push(`自动刷新 ${result.meta.refreshed} 个`)
     if (failed) parts.push(`测试失败 ${failed} 个`)
     return `测活完成：${parts.join('，')}`
+  }
+  if (state.target === 'inject') {
+    return '已生成注入代码'
   }
   return result.meta.warnings.length ? '已转换，有提示' : '转换成功'
 }
@@ -1399,13 +1425,23 @@ function updateRepairStatus(skipped = []) {
 function refreshOutputPreview() {
   if (state.target === 'health') {
     elements.outputText.hidden = true
+    elements.injectResult.hidden = true
     elements.healthResult.hidden = false
     renderHealthReport(state.latestHealthReport)
     return
   }
 
+  if (state.target === 'inject') {
+    elements.outputText.hidden = true
+    elements.healthResult.hidden = true
+    elements.injectResult.hidden = false
+    renderInjectResult(state.latestInjectData)
+    return
+  }
+
   elements.outputText.hidden = false
   elements.healthResult.hidden = true
+  elements.injectResult.hidden = true
   if (!state.latestOutput.trim()) {
     elements.outputText.value = ''
     return
@@ -1550,6 +1586,170 @@ function isAdminHealthReport(report) {
 
 function isBrowserOpenAiMeReport(report) {
   return /browser-direct-openai-me/i.test(firstString(report?.method))
+}
+
+function buildSessionInjectResult(input) {
+  let parsed
+  try {
+    parsed = JSON.parse(String(input).trim())
+  } catch (error) {
+    throw new Error('JSON 解析失败：' + (error.message || '格式不正确'))
+  }
+  if (Array.isArray(parsed)) {
+    parsed = parsed.find((item) => item && typeof item === 'object') || {}
+  }
+  if (!parsed || typeof parsed !== 'object') {
+    throw new Error('注入工具需要一个包含 session_token 的 JSON 对象')
+  }
+
+  const sessionToken = firstString(parsed.session_token)
+  if (!sessionToken) {
+    throw new Error('JSON 中缺少 session_token 字段')
+  }
+  const accessToken = firstString(parsed.access_token)
+  const accountId = firstString(parsed.chatgpt_account_id, parsed.account_id)
+
+  const info = {
+    email: firstString(parsed.email, '-'),
+    name: firstString(parsed.name, '-'),
+    planType: firstString(parsed.plan_type, parsed.chatgpt_plan_type, '-'),
+    accountId: accountId || '-',
+    expired: firstString(parsed.expired, '-'),
+    sessionTokenPreview: sessionToken.slice(0, 30) + '...',
+    accessTokenPreview: accessToken ? accessToken.slice(0, 30) + '...' : '（无）'
+  }
+
+  const consoleCode = buildSessionInjectConsoleCode(sessionToken)
+  const bookmarklet = buildSessionInjectBookmarklet(sessionToken)
+  const workspaceCode = accountId ? buildSessionWorkspaceCode(accountId) : ''
+
+  return {
+    output: consoleCode,
+    meta: { count: 1, missingRefreshToken: 0, format: 'Session 注入代码', warnings: [] },
+    inject: { info, consoleCode, bookmarklet, workspaceCode, accountId }
+  }
+}
+
+function buildSessionInjectConsoleCode(sessionToken) {
+  return [
+    '// ChatGPT Session 注入',
+    `document.cookie = "__Secure-next-auth.session-token=${sessionToken}; path=/; domain=.chatgpt.com; secure; samesite=lax; max-age=2592000";`,
+    'console.log("✅ Session token 已注入！正在刷新页面...");',
+    'location.reload();'
+  ].join('\n')
+}
+
+function buildSessionInjectBookmarklet(sessionToken) {
+  return `javascript:void(function(){if(!location.hostname.includes('chatgpt.com')){alert('请在 chatgpt.com 页面使用！');return;}document.cookie="__Secure-next-auth.session-token=${sessionToken}; path=/; domain=.chatgpt.com; secure; samesite=lax; max-age=2592000";alert('✅ 注入成功！页面即将刷新');location.reload();}())`
+}
+
+function buildSessionWorkspaceCode(accountId) {
+  return [
+    '// 获取工作空间 access_token',
+    "fetch('/api/auth/session', { credentials: 'include', headers: { 'accept': '*/*' } })",
+    '  .then(r => r.json())',
+    '  .then(data => {',
+    '    if (data.accessToken) {',
+    '      console.log("✅ Access Token (当前空间):");',
+    '      console.log(data.accessToken);',
+    `      console.log("\\n📋 Account ID: ${accountId}");`,
+    '      navigator.clipboard.writeText(data.accessToken)',
+    '        .then(() => console.log("\\n✅ 已复制到剪贴板！"))',
+    '        .catch(() => console.log("\\n⚠️ 请手动复制上面的 token"));',
+    '    } else {',
+    '      console.log("❌ 未获取到 accessToken:", data);',
+    '    }',
+    '  });'
+  ].join('\n')
+}
+
+function renderInjectResult(data) {
+  if (!elements.injectResult) return
+  if (!data) {
+    elements.injectResult.innerHTML = '<div class="inject-empty">粘贴含 session_token 的 JSON 后，点击“转换”生成注入代码</div>'
+    return
+  }
+
+  const info = data.info || {}
+  const infoRows = [
+    ['邮箱', info.email],
+    ['姓名', info.name],
+    ['计划', info.planType],
+    ['Account ID', info.accountId],
+    ['过期时间', info.expired],
+    ['Session Token', info.sessionTokenPreview],
+    ['Access Token', info.accessTokenPreview]
+  ].map(([label, value]) => `
+    <tr>
+      <td>${escapeHtml(label)}</td>
+      <td>${escapeHtml(value ?? '-')}</td>
+    </tr>
+  `).join('')
+
+  const workspaceBlock = data.workspaceCode ? `
+    <div class="inject-block">
+      <div class="inject-block__head">
+        <span class="kicker">切换工作空间（可选）</span>
+        <button class="file-button" type="button" data-copy-target="injectWorkspaceCode">复制代码</button>
+      </div>
+      <p class="inject-hint">登录后如需切换到工作空间，在 ChatGPT 页面控制台执行以下代码，会打印并复制该空间的 access_token。</p>
+      <pre class="inject-code" id="injectWorkspaceCode">${escapeHtml(data.workspaceCode)}</pre>
+    </div>
+  ` : ''
+
+  elements.injectResult.innerHTML = `
+    <div class="inject-block">
+      <span class="kicker">账号信息</span>
+      <div class="inject-info"><table><tbody>${infoRows}</tbody></table></div>
+    </div>
+    <div class="inject-block">
+      <div class="inject-block__head">
+        <span class="kicker">① 控制台脚本</span>
+        <button class="file-button" type="button" data-copy-target="injectConsoleCode">复制代码</button>
+      </div>
+      <p class="inject-hint">打开 <a href="https://chatgpt.com" target="_blank" rel="noopener noreferrer">chatgpt.com</a>，按 F12 → Console，粘贴以下代码回车执行，页面会自动刷新完成登录。</p>
+      <pre class="inject-code" id="injectConsoleCode">${escapeHtml(data.consoleCode)}</pre>
+    </div>
+    <div class="inject-block">
+      <span class="kicker">② 书签注入</span>
+      <p class="inject-hint">把下面的按钮拖到浏览器书签栏，然后在 chatgpt.com 页面点击它即可注入。</p>
+      <div class="inject-bookmarklet">
+        <a class="button button--solid" href="${escapeHtml(data.bookmarklet)}" draggable="true">📌 ChatGPT 登录</a>
+        <span>↑ 拖拽此按钮到书签栏</span>
+      </div>
+    </div>
+    ${workspaceBlock}
+    <div class="inject-warn">⚠️ 必须在 <strong>chatgpt.com</strong> 域名下执行，其他页面无法设置 cookie。</div>
+  `
+}
+
+function copyTextToClipboard(text, trigger) {
+  const done = () => {
+    if (trigger) {
+      const original = trigger.textContent
+      trigger.textContent = '已复制'
+      window.setTimeout(() => { trigger.textContent = original }, 1500)
+    }
+    showToast('已复制到剪贴板')
+  }
+  const fallback = () => {
+    const textarea = document.createElement('textarea')
+    textarea.value = String(text ?? '')
+    document.body.appendChild(textarea)
+    textarea.select()
+    try {
+      document.execCommand('copy')
+      done()
+    } catch {
+      showToast('复制失败，请手动选择复制')
+    }
+    document.body.removeChild(textarea)
+  }
+  if (navigator.clipboard?.writeText) {
+    navigator.clipboard.writeText(String(text ?? '')).then(done).catch(fallback)
+    return
+  }
+  fallback()
 }
 
 function escapeHtml(value) {
@@ -2122,6 +2322,11 @@ function downloadOutput() {
     showToast('已下载本地测活结果')
     return
   }
+  if (state.target === 'inject') {
+    downloadBlob(new Blob([state.latestOutput], { type: 'text/javascript;charset=utf-8' }), 'chatgpt-session-inject.js')
+    showToast('已下载注入代码')
+    return
+  }
   openDownloadDialog()
 }
 
@@ -2405,6 +2610,7 @@ function buildDemoJwt(payload) {
 function currentOutputLabel() {
   if (state.target === 'repair') return '二验 JSON 修正'
   if (state.target === 'health') return '本地测活结果'
+  if (state.target === 'inject') return 'Session 注入代码'
   return state.target === 'sub' ? 'Sub2API' : 'CPA JSONL'
 }
 
