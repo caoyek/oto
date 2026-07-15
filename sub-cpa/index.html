@@ -1,0 +1,171 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Sub / CPA 在线互转</title>
+    <link rel="icon" href="data:," />
+    <link rel="stylesheet" href="./src/styles.css" />
+  </head>
+  <body>
+    <main class="app-shell">
+      <header class="topbar">
+        <div class="brand">
+          <span>本地转换 · 不上传凭证</span>
+          <h1>Sub / CPA 互转</h1>
+          <p>先登录 Codex 或粘贴/拖入 JSON，再选择输出目标：CPA、SUB、二验修正或本地测活。</p>
+        </div>
+
+        <div class="topbar__right">
+          <div class="gpt-links" aria-label="GPT 和 Codex 登录入口">
+            <button id="codexLogin" type="button">登录 Codex</button>
+            <a href="https://chatgpt.com/" target="_blank" rel="noopener noreferrer">登录 GPT</a>
+            <a href="https://chatgpt.com/api/auth/session" target="_blank" rel="noopener noreferrer">获取 AT JSON</a>
+            <a href="./ldxp-bridge.user.js" target="_blank" rel="noopener noreferrer">安装 LDXP 自动抓取</a>
+          </div>
+          <div class="segmented" role="group" aria-label="输出目标">
+            <button id="targetCpa" class="segmented__item" type="button">CPA</button>
+            <button id="targetSub" class="segmented__item is-active" type="button">SUB</button>
+            <button id="targetRepair" class="segmented__item" type="button">二验修正</button>
+            <button id="targetHealth" class="segmented__item" type="button">本地测活</button>
+          </div>
+          <button id="pasteDemo" class="button button--quiet" type="button">示例</button>
+        </div>
+      </header>
+
+      <section class="status-strip" aria-label="转换状态">
+        <div>
+          <span>记录</span>
+          <strong id="statCount">0</strong>
+        </div>
+        <div>
+          <span>缺 RT/未修正</span>
+          <strong id="statMissingRefresh">0</strong>
+        </div>
+        <div>
+          <span>输出</span>
+          <strong id="statFormat">Sub2API</strong>
+        </div>
+        <div>
+          <span>状态</span>
+          <strong id="statStatus">待转换</strong>
+        </div>
+      </section>
+
+      <section class="workspace" aria-label="转换工作台">
+        <section class="panel">
+          <div class="panel__head">
+            <div>
+              <span class="kicker">输入</span>
+              <h2 id="inputTitle">输入 JSON</h2>
+            </div>
+            <label class="file-button">
+              上传
+              <input id="fileInput" type="file" accept=".json,.jsonl,.txt,application/json,text/plain" />
+            </label>
+          </div>
+
+          <div id="dropZone" class="drop-zone" role="button" tabindex="0" aria-label="拖拽上传文件并自动识别格式">
+            <strong>全屏拖拽上传</strong>
+            <span>Codex RT 回调链接、GPT AT、CPA、SUB 都可以；测活会直接回填结果</span>
+          </div>
+
+          <div id="repairUpload" class="repair-upload" hidden>
+            <div class="repair-upload__head">
+              <strong>二验 JSON 修正文件</strong>
+              <span>保留原结构和 refresh_token，只替换旧 access_token</span>
+            </div>
+            <div class="inline-actions">
+              <label class="file-button">
+                上传修正 JSON
+                <input id="repairFileInput" type="file" accept=".json,application/json,text/plain" multiple />
+              </label>
+              <button id="clearRepairFiles" class="file-button" type="button">清空修正文件</button>
+            </div>
+            <div id="repairStatus" class="status-line">等待上传带 refresh_token 和旧 access_token 的 JSON。</div>
+          </div>
+
+          <textarea
+            id="sourceText"
+            spellcheck="false"
+            placeholder="粘贴 Codex 带 rt 的授权回调链接、GPT Session JSON、CPA/Codex JSON、JSONL 或 Sub2API 导入 JSON..."
+          ></textarea>
+        </section>
+
+        <section class="panel panel--output">
+          <div class="panel__head">
+            <div>
+              <span class="kicker">输出</span>
+              <h2 id="outputTitle">SUB 输出</h2>
+            </div>
+            <div class="inline-actions">
+              <button id="downloadOutput" class="file-button" type="button">下载</button>
+            </div>
+          </div>
+
+          <div id="healthResult" class="health-result" hidden></div>
+          <textarea id="outputText" spellcheck="false" readonly placeholder="转换结果会显示在这里"></textarea>
+        </section>
+      </section>
+
+      <footer class="commandbar">
+        <div class="commandbar__actions">
+          <button id="convertNow" class="button button--solid" type="button">转换</button>
+          <button id="checkFormat" class="button button--quiet" type="button">检查</button>
+          <button id="swapDirection" class="button button--quiet" type="button">切换目标</button>
+          <button id="clearAll" class="button button--quiet" type="button">清空</button>
+        </div>
+      </footer>
+    </main>
+
+    <div id="dropOverlay" class="drop-overlay" aria-hidden="true">
+      <div>
+        <strong>松手上传并自动转换</strong>
+        <span>松手后按当前目标输出 CPA 或 SUB</span>
+      </div>
+    </div>
+    <div id="downloadDialog" class="modal" aria-hidden="true">
+      <form id="downloadForm" class="modal__panel" role="dialog" aria-modal="true" aria-labelledby="downloadTitle">
+        <div>
+          <span class="kicker">下载设置</span>
+          <h2 id="downloadTitle">选择导出数量</h2>
+          <p id="downloadHint">不填则导出全部。</p>
+        </div>
+        <label class="modal__field">
+          <span>本次导出多少条</span>
+          <input id="downloadLimit" type="number" min="1" inputmode="numeric" placeholder="全部" />
+        </label>
+        <div class="modal__actions">
+          <button id="cancelDownload" class="button button--quiet" type="button">取消</button>
+          <button class="button button--solid" type="submit">确认下载</button>
+        </div>
+      </form>
+    </div>
+    <div id="codexLoginDialog" class="modal" aria-hidden="true">
+      <section class="modal__panel modal__panel--wide" role="dialog" aria-modal="true" aria-labelledby="codexLoginTitle">
+        <div>
+          <span class="kicker">Codex 授权</span>
+          <h2 id="codexLoginTitle">登录 Codex 生成授权链接</h2>
+          <p>
+            本页只在浏览器本地生成授权链接，不上传 token。若回调链接只返回 code，保持本页不关闭并粘回左侧输入框，会自动换取 RT 后转 CPA / SUB。
+          </p>
+        </div>
+        <label class="modal__field">
+          <span>授权链接</span>
+          <textarea id="codexAuthUrl" class="modal__textarea" readonly spellcheck="false"></textarea>
+        </label>
+        <label class="modal__field">
+          <span>code_verifier（页面会自动使用，也可手动备用）</span>
+          <input id="codexCodeVerifier" readonly />
+        </label>
+        <div class="modal__actions">
+          <button id="closeCodexLogin" class="button button--quiet" type="button">关闭</button>
+          <button id="copyCodexAuthUrl" class="button button--quiet" type="button">复制链接</button>
+          <button id="openCodexAuthUrl" class="button button--solid" type="button">打开授权</button>
+        </div>
+      </section>
+    </div>
+    <div id="toast" class="toast" role="status" aria-live="polite"></div>
+    <script type="module" src="./src/app.js"></script>
+  </body>
+</html>
